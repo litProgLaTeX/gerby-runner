@@ -1,10 +1,11 @@
 
-import argparse
+# import argparse
 import logging
+import signal
 import sys
-import yaml
+# import yaml
 
-from waitress import serve
+from waitress import serve, wasyncore
 
 from lpilGerbyConfig.config import ConfigManager
 
@@ -22,23 +23,23 @@ from flask import render_template
 def showLpilToc() :
   tocDict = {}
   tocDocs = []
-  #print("---------------------------------------------------------")
-  for anEntry in LPiLToc.select( LPiLToc, Tag ).join(Tag).order_by(LPiLToc.id) :
-    #print(anEntry.id, anEntry.entry.tag, anEntry.entry.doc, anEntry.entry.type, anEntry.entry.name)
+  # print("---------------------------------------------------------")
+  for anEntry in LPiLToc.select( LPiLToc, Tag ).join(Tag).order_by(LPiLToc.id) :  # noqa
+    # print(anEntry.id, anEntry.entry.tag, anEntry.entry.doc, anEntry.entry.type, anEntry.entry.name)  # noqa
     theDoc = anEntry.entry.doc
     if theDoc not in tocDocs : tocDocs.append(theDoc)
     if theDoc not in tocDict : tocDict[theDoc] = []
     tocDict[theDoc].append(anEntry)
-  #print("---------------------------------------------------------")
+  # print("---------------------------------------------------------")
 
   gitUrls = {}
   docOrder = []
-  #print("---------------------------------------------------------")
+  # print("---------------------------------------------------------")
   for aDoc in LPiLDocs.select().order_by(LPiLDocs.id) :
-    #print(aDoc.doc, aDoc.gitUrl.replace('.git', ''))
+    # print(aDoc.doc, aDoc.gitUrl.replace('.git', ''))
     docOrder.append(aDoc.doc)
     gitUrls[aDoc.doc] = aDoc.gitUrl.replace('.git','')
-  #print("---------------------------------------------------------")
+  # print("---------------------------------------------------------")
 
   return render_template(
     "toc.lpil.html",
@@ -58,13 +59,32 @@ def showLpilRedme(docname) :
 
 @gerby.application.app.route("/lpiltodo/<string:docname>")
 def showLpilTodo(docname) :
-  html=""
+  html = ""
   for anEntry in LPiLDocs.select().where(LPiLDocs.doc == docname) :
     html = anEntry.todo
     break
   return render_template('lpil.todo.html', docname=docname, html=html)
 
+def sigtermHandler(signum, frame) :
+
+  # simply call sys.exit as this will raise a SystemExit exception which
+  # is then "handled" by Waitress and if we care, can be handled by our
+  # app.
+
+  # try raising the more specific ExitNow exception defined by
+  # waitress.wasyncore.... most of our application does not care... BUT
+  # our database update/insert operations should be protected.
+
+  raise wasyncore.ExitNow()
+
+  sys.exit(0)
+
+shutDownExceptions = (wasyncore.ExitNow, KeyboardInterrupt, SystemExit)
+
 def cli() :
+
+  signal.signal(signal.SIGTERM, sigtermHandler)
+
   logging.basicConfig(stream=sys.stdout)
 
   # Load the configuration values
@@ -99,7 +119,7 @@ def cli() :
       sys.exit(1)
 
   collectionName = None
-  for aCollectionName, aCollectionConfig in config['gerby.collections'].items() :
+  for aCollectionName, aCollectionConfig in config['gerby.collections'].items() :  # noqa
     if aCollectionName.lower() == requestedCollection :
       collectionName = aCollectionName
       collectionConfig = aCollectionConfig
@@ -143,10 +163,16 @@ def cli() :
     print(f"  http://{webConfig['host']}:{webConfig['port']}")
     print("")
 
-  #print(list(gerby.application.app.view_functions.keys()))
+  # print(list(gerby.application.app.view_functions.keys()))
 
-  serve(
-    gerby.application.app.wsgi_app,
-    host=webConfig['host'],
-    port=webConfig['port'],
-  )
+  try :
+    serve(
+      gerby.application.app.wsgi_app,
+      host=webConfig['host'],
+      port=webConfig['port'],
+    )
+  except shutDownExceptions :
+    pass
+
+  print("\nYour Waitress has left")
+
